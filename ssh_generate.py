@@ -113,29 +113,26 @@ def main():
 
     headers = {'Circle-Token': CIRCLE_API_TOKEN, 'Content-type': 'application/json'}
 
-    projects_url = "https://circleci.com/api/v1.1/organization/{vcs}/{org}/settings".format(vcs=VCS, org=ORG)
+    # /organization isn't documented?
+    projects_url = "https://circleci.com/api/v1.1/projects"
     projects_resp = request(url=projects_url, headers=headers)
     if projects_resp.error_count > 0:
         raise Exception("error retrieving projects: {response} url: {url}".format(response=str(projects_resp), url=projects_url))
 
     projects_resp = projects_resp.json()
-    if 'projects' not in projects_resp:
-        raise Exception("no projects found in response")
 
-    projects = projects_resp['projects']
     project_names = []
-    for project in projects:
+    for project in projects_resp:
+        project_name = project['reponame']
         vcs_url = project['vcs_url']
         vcs_url_parts = vcs_url.split("/")
         project_name = vcs_url_parts[-1]
         org_name = vcs_url_parts[-2]
 
-        # Pull list of projects with followers to check keys for
-        # If a project doesn't have followers, it won't have keys
-        if len(project['followers']) > 0 and org_name == ORG:
-            project_names.append(project_name)
+        project_names.append(project_name)
 
     for project in project_names:
+        print(f"examining {project}")
         # Pulls all checkout keys for a project
         ssh_keys_url = "https://circleci.com/api/v2/project/{vcs}/{org}/{project}/checkout-key".format(vcs=VCS, org=ORG, project=project)
         ssh_keys_resp = request(url=ssh_keys_url, headers=headers)
@@ -146,44 +143,14 @@ def main():
 
         key_info = ssh_keys_resp['items']
         if len(key_info) == 0:
+            print("  no keys found, skipping")
             continue
 
         # Finds the current prefered key, which is used with checkout step
         # Checks if the prefered key is ssh-rsa
         key_info = key_info[0]
         if key_info['preferred'] and key_info['public_key'].startswith('ssh-rsa'):
-            print('ssh-rsa key found as prefered ssh key for ' + project)
-            ssh_key_type = key_info['type']
-
-            # Log old key information to file
-            print('{project} old preffered key: old_keys_{org}.txt'.format(project=project, org=ORG))
-
-            old_keys_file = open("old_keys_{org}.txt".format(org = ORG), "a")
-            old_keys_file.write(str(ssh_keys_resp) + "\n")
-            old_keys_file.close()
-
-            print("Creating key for {project} logging new key to new_keys_{org}.txt".format(project=project, org=ORG))
-
-            if ssh_key_type == "github-user-key":
-                # Creating user-key as prefered key was user-key
-                payload = {"type": "user-key"}
-            else:
-                # Creating deploy-key as prefered key was deploy-key
-                payload = {"type": "deploy-key"}
-
-            checkout_key_url = "https://circleci.com/api/v2/project/{vcs}/{org}/{project}/checkout-key".format(vcs=VCS, project=project, org=ORG)
-            checkout_key_resp = request(method="POST", url=checkout_key_url, headers=headers, data=payload)
-            if checkout_key_resp.status == 403:
-                print("skipping project: {project} as unable to create new key. url: {url}".format(project=project, url=checkout_key_url))
-                continue
-            elif checkout_key_resp.error_count > 0:
-                raise Exception("error creating new checkout key: {response} url: {url}".format(response=str(checkout_key_resp), url=checkout_key_url))
-
-            checkout_key_resp = checkout_key_resp.json()
-
-            new_keys_file = open("new_keys_{org}.txt".format(org = ORG), "a")
-            new_keys_file.write("{project} new prefered key: {key} \n".format(project=project, key=str(checkout_key_resp)))
-            new_keys_file.close()
+            print(f'found key {key_info}')
         else:
             print("{project} prefered key is not ssh-rsa, no action taken.".format(project=project))
 
